@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { VegaLite } from 'react-vega';
 import axios from 'axios';
-import { FileUpload, DataPreview} from './csvhandle.js';
+import { FileUpload, DataPreview } from './csvhandle.js';
 import userAvatar from './pictures/aiassistant.jpg';
 import assistantAvatar from './pictures/aiassistant.jpg';
 
@@ -33,6 +33,12 @@ function Chatbot({ data }) {
   const [isLoading, setIsLoading] = useState(false);
 
   const conversationContainerRef = useRef(null);
+  const placeholderIdRef = useRef(null);
+
+  // Generate a unique string-based message ID
+  const generateMessageId = () => {
+    return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  };
 
   useEffect(() => {
     if (conversationContainerRef.current) {
@@ -73,7 +79,7 @@ function Chatbot({ data }) {
     if (!data || data.length === 0) {
       return 'The uploaded dataset is empty. Please provide a valid CSV file.';
     }
-    return null; 
+    return null;
   }
 
   function shouldGenerateChart(query) {
@@ -90,26 +96,23 @@ function Chatbot({ data }) {
     console.log('handleSendQuery: Sending request');
     setIsLoading(true);
 
-    const newHistory = [
-      ...conversationHistory,
-      { sender: 'user', text: userQuery },
-    ];
+    const userMessageId = generateMessageId();
+    const userMessage = { id: userMessageId, sender: 'user', text: userQuery };
+    setConversationHistory((prevHistory) => [...prevHistory, userMessage]);
 
     if (!data) {
-      setConversationHistory([
-        ...newHistory,
-        { sender: 'assistant', text: 'Please upload a dataset before sending a message.' },
-      ]);
+      const assistantMessageId = generateMessageId();
+      const assistantMessage = { id: assistantMessageId, sender: 'assistant', text: 'Please upload a dataset before sending a message.' };
+      setConversationHistory((prevHistory) => [...prevHistory, assistantMessage]);
       setIsLoading(false);
       setUserQuery('');
       return;
     }
 
     if (!shouldGenerateChart(userQuery)) {
-      setConversationHistory([
-        ...newHistory,
-        { sender: 'assistant', text: 'Sure, let me help you with that.' },
-      ]);
+      const assistantMessageId = generateMessageId();
+      const assistantMessage = { id: assistantMessageId, sender: 'assistant', text: 'Sure, let me help you with that.' };
+      setConversationHistory((prevHistory) => [...prevHistory, assistantMessage]);
       setIsLoading(false);
       setUserQuery('');
       return;
@@ -121,20 +124,28 @@ function Chatbot({ data }) {
 
     const validationError = validateDataset(data);
     if (validationError) {
-      setConversationHistory([
-        ...newHistory,
-        { sender: 'assistant', text: validationError },
-      ]);
+      const assistantMessageId = generateMessageId();
+      const assistantMessage = { id: assistantMessageId, sender: 'assistant', text: validationError };
+      setConversationHistory((prevHistory) => [...prevHistory, assistantMessage]);
       setIsLoading(false);
       setUserQuery('');
       return;
     }
 
+    const placeholderMessageId = generateMessageId();
+    const placeholderMessage = {
+      id: placeholderMessageId,
+      sender: 'assistant',
+      text: 'Working on it... this may take a few seconds.',
+    };
+    setConversationHistory((prevHistory) => [...prevHistory, placeholderMessage]);
+    placeholderIdRef.current = placeholderMessageId;
+
     try {
       console.log('Sending request to server with prompt:', prompt);
       console.log('Expected fields:', expectedFields);
 
-      const response = await axios.post(`${process.env.REACT_APP_BACKEND_URL}/api/generate-chart`, {
+      const response = await axios.post(`${process.env.REACT_APP_API_URL}/api/generate-chart`, {
         prompt: prompt,
         expectedFields: expectedFields,
       });
@@ -148,20 +159,29 @@ function Chatbot({ data }) {
         const sampledData = sampleData(data); 
         chartSpec.data = { values: sampledData };
 
-        setConversationHistory([
-          ...newHistory,
-          { sender: 'assistant', text: description, chartSpec: chartSpec },
-        ]);
+        setConversationHistory((prevHistory) =>
+          prevHistory.map((message) =>
+            message.id === placeholderIdRef.current
+              ? { ...message, text: description, chartSpec: chartSpec }
+              : message
+          )
+        );
       } else if (description) {
-        setConversationHistory([
-          ...newHistory,
-          { sender: 'assistant', text: description },
-        ]);
+        setConversationHistory((prevHistory) =>
+          prevHistory.map((message) =>
+            message.id === placeholderIdRef.current
+              ? { ...message, text: description }
+              : message
+          )
+        );
       } else {
-        setConversationHistory([
-          ...newHistory,
-          { sender: 'assistant', text: 'Received an unexpected response. Please try again.' },
-        ]);
+        setConversationHistory((prevHistory) =>
+          prevHistory.map((message) =>
+            message.id === placeholderIdRef.current
+              ? { ...message, text: 'Received an unexpected response. Please try again.' }
+              : message
+          )
+        );
       }
       setUserQuery('');
     } catch (error) {
@@ -177,13 +197,17 @@ function Chatbot({ data }) {
         }
       }
 
-      setConversationHistory([
-        ...newHistory,
-        { sender: 'assistant', text: errorMessage },
-      ]);
+      setConversationHistory((prevHistory) =>
+        prevHistory.map((message) =>
+          message.id === placeholderIdRef.current
+            ? { ...message, text: errorMessage }
+            : message
+        )
+      );
     } finally {
       console.log('handleSendQuery: Request finished');
       setIsLoading(false);
+      placeholderIdRef.current = null;
     }
   };
 
@@ -195,15 +219,20 @@ function Chatbot({ data }) {
     }
   };
 
+  const handleClearMessages = () => {
+    setConversationHistory([]);
+    setUserQuery('');
+  };
+
   return (
     <div className="flex flex-col flex-grow">
       <div
         className="flex-grow overflow-y-auto p-4 rounded-lg bg-[#f0ebe6] max-h-[500px]"
         ref={conversationContainerRef} 
       >
-        {conversationHistory.map((message, index) => (
+        {conversationHistory.map((message) => (
           <div
-            key={index}
+            key={message.id}
             className={`mb-4 flex ${
               message.sender === 'user' ? 'justify-end' : 'justify-start'
             }`}
@@ -260,7 +289,16 @@ function Chatbot({ data }) {
           onClick={handleSendQuery}
           disabled={isLoading}
         >
-          {isLoading ? 'Sending...' : 'Send'}
+          Send
+        </button>
+        <button
+          className={`ml-2 px-6 py-3 bg-red-500 text-white rounded-full focus:outline-none focus:ring-2 focus:ring-red-500 ${
+            isLoading ? 'opacity-50 cursor-not-allowed' : 'hover:bg-red-600'
+          }`}
+          onClick={handleClearMessages}
+          disabled={isLoading}
+        >
+          Clear Messages
         </button>
       </div>
     </div>
