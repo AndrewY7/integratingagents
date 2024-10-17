@@ -90,21 +90,27 @@ app.post('/api/generate-chart', async (req, res) => {
 
   try {
     const response = await callOpenAIWithRetry(prompt);
-    console.log('OpenAI API response:', response);
+    console.log('OpenAI API response:', JSON.stringify(response, null, 2));
 
     const assistantMessage = response.choices[0].message.content;
     console.log('Assistant message:', assistantMessage);
 
     const { chartSpec, description } = parseAssistantResponse(assistantMessage, expectedFields);
-    console.log('Parsed response:', { chartSpec, description });
+    console.log('Parsed response:', JSON.stringify({ chartSpec, description }, null, 2));
+
+    if (!chartSpec && !description) {
+      throw new Error('Failed to generate chart specification and description');
+    }
 
     res.json({ chartSpec, description });
   } catch (error) {
+    console.error('Error in /api/generate-chart:', error);
+
     if (error.response) {
       const status = error.response.status;
       const errorData = error.response.data;
 
-      console.error('Error calling OpenAI API:', errorData);
+      console.error('Error calling OpenAI API:', JSON.stringify(errorData, null, 2));
 
       if (status === 429) {
         res.status(429).json({
@@ -118,7 +124,6 @@ app.post('/api/generate-chart', async (req, res) => {
         });
       }
     } else {
-      console.error('Error:', error.message);
       res.status(500).json({
         error: 'An unexpected error occurred.',
         details: error.message,

@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { VegaLite } from 'react-vega';
 import axios from 'axios';
 import { FileUpload, DataPreview } from './csvhandle.js';
-import userAvatar from './pictures/aiassistant.jpg';
+import userAvatar from './pictures/user.jpg';
 import assistantAvatar from './pictures/aiassistant.jpg';
+import Spinner from './Spinner';
 
 function ChartRenderer({ spec }) {
   if (!spec) {
@@ -34,45 +35,54 @@ function Chatbot({ data }) {
 
   const conversationContainerRef = useRef(null);
   const placeholderIdRef = useRef(null);
+  const messagesEndRef = useRef(null);
 
-  // Generate a unique string-based message ID
   const generateMessageId = () => {
     return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   };
 
   useEffect(() => {
-    if (conversationContainerRef.current) {
-      conversationContainerRef.current.scrollTop = conversationContainerRef.current.scrollHeight;
+    if (!isLoading) {
+      scrollToBottom();
     }
-  }, [conversationHistory]);
+  }, [conversationHistory, isLoading]);
+
+  const scrollToBottom = () => {
+    setTimeout(() => {
+      if (messagesEndRef.current) {
+        messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+      }
+    }, 100); // Small delay to ensure content is rendered
+  };
 
   function constructPrompt(userQuery, datasetInfo) {
     return `You are an AI assistant that generates Vega-Lite v5 specifications based on user queries and provided dataset information.
-      Given the dataset information below, generate a Vega-Lite JSON specification to answer the user's query. If the dataset is too large or granular, perform sensible aggregation (e.g., mean, sum, or count) on relevant fields to provide a more general visualization.
+Given the dataset information below, generate a Vega-Lite JSON specification to answer the user's query. If the dataset is too large or granular, perform sensible aggregation (e.g., mean, sum, or count) on relevant fields to provide a more general visualization.
 
-      **Dataset Information:**
-      ${JSON.stringify(datasetInfo, null, 2)}
+**Dataset Information:**
+${JSON.stringify(datasetInfo, null, 2)}
 
-      **User Query:**
-      ${userQuery}
+**User Query:**
+${userQuery}
 
-      **Instructions:**
-      - Generate a Vega-Lite specification (\`chartSpec\`) that effectively visualizes the data based on the query.
-      - If the data contains too many points, use aggregation or sampling where appropriate.
-      - Provide a brief description of the chart in plain English (\`description\`).
+**Instructions:**
+- Generate a Vega-Lite specification (\`chartSpec\`) that effectively visualizes the data based on the query.
+- If the data contains too many points, use aggregation or sampling where appropriate.
+- Provide a brief description of the chart in plain English (\`description\`).
+- If the query cannot be answered with the dataset, respond with \`{"error": "Please try a different query."}\`.
 
-      **Response Format:**
-      {
-        "chartSpec": { /* Vega-Lite JSON specification */ },
-        "description": "/* Brief description of the chart in plain English */"
-      }
+**Response Format:**
+{
+  "chartSpec": { /* Vega-Lite JSON specification */ },
+  "description": "/* Brief description of the chart in plain English */"
+}
 
-      Ensure that:
-      - The \`$schema\` in \`chartSpec\` is set to "https://vega.github.io/schema/vega-lite/v5.json".
-      - All field names in the specification match exactly those in the dataset.
-      - Include the "data" property in the chartSpec with the "values" key set to an empty array. The actual data will be injected later.
+Ensure that:
+- The \`$schema\` in \`chartSpec\` is set to "https://vega.github.io/schema/vega-lite/v5.json".
+- All field names in the specification match exactly those in the dataset.
+- Include the "data" property in the chartSpec with the "values" key set to an empty array. The actual data will be injected later.
 
-      Only provide the JSON response without any additional text. If the query cannot be answered with the dataset, inform the user politely.`;
+Only provide the JSON response without any additional text.`;
   }
 
   function validateDataset(data) {
@@ -80,11 +90,6 @@ function Chatbot({ data }) {
       return 'The uploaded dataset is empty. Please provide a valid CSV file.';
     }
     return null;
-  }
-
-  function shouldGenerateChart(query) {
-    const visualizationTerms = ['visualize', 'chart', 'graph', 'plot', 'show', 'display', 'compare', 'trend'];
-    return visualizationTerms.some(term => query.toLowerCase().includes(term));
   }
 
   const handleSendQuery = async () => {
@@ -102,16 +107,11 @@ function Chatbot({ data }) {
 
     if (!data) {
       const assistantMessageId = generateMessageId();
-      const assistantMessage = { id: assistantMessageId, sender: 'assistant', text: 'Please upload a dataset before sending a message.' };
-      setConversationHistory((prevHistory) => [...prevHistory, assistantMessage]);
-      setIsLoading(false);
-      setUserQuery('');
-      return;
-    }
-
-    if (!shouldGenerateChart(userQuery)) {
-      const assistantMessageId = generateMessageId();
-      const assistantMessage = { id: assistantMessageId, sender: 'assistant', text: 'Sure, let me help you with that.' };
+      const assistantMessage = {
+        id: assistantMessageId,
+        sender: 'assistant',
+        text: 'Please upload a dataset before sending a message.',
+      };
       setConversationHistory((prevHistory) => [...prevHistory, assistantMessage]);
       setIsLoading(false);
       setUserQuery('');
@@ -125,7 +125,11 @@ function Chatbot({ data }) {
     const validationError = validateDataset(data);
     if (validationError) {
       const assistantMessageId = generateMessageId();
-      const assistantMessage = { id: assistantMessageId, sender: 'assistant', text: validationError };
+      const assistantMessage = {
+        id: assistantMessageId,
+        sender: 'assistant',
+        text: validationError,
+      };
       setConversationHistory((prevHistory) => [...prevHistory, assistantMessage]);
       setIsLoading(false);
       setUserQuery('');
@@ -137,6 +141,7 @@ function Chatbot({ data }) {
       id: placeholderMessageId,
       sender: 'assistant',
       text: 'Working on it... this may take a few seconds.',
+      isLoading: true,
     };
     setConversationHistory((prevHistory) => [...prevHistory, placeholderMessage]);
     placeholderIdRef.current = placeholderMessageId;
@@ -145,45 +150,60 @@ function Chatbot({ data }) {
       console.log('Sending request to server with prompt:', prompt);
       console.log('Expected fields:', expectedFields);
 
-      const response = await axios.post(`${process.env.REACT_APP_API_URL}/api/generate-chart`, {
-        prompt: prompt,
-        expectedFields: expectedFields,
-      });
+      const response = await axios.post(
+        `${process.env.REACT_APP_API_URL}/api/generate-chart`,
+        {
+          prompt: prompt,
+          expectedFields: expectedFields,
+        }
+      );
 
-      const { chartSpec, description } = response.data;
+      const { chartSpec, description, error } = response.data;
 
-      console.log('Received chartSpec:', chartSpec);
-      console.log('Received description:', description);
+      const currentPlaceholderId = placeholderIdRef.current;
 
-      if (chartSpec && description) {
-        const sampledData = sampleData(data); 
+      if (error) {
+        setConversationHistory((prevHistory) =>
+          prevHistory.map((message) =>
+            message.id === currentPlaceholderId
+              ? { ...message, text: error, isLoading: false }
+              : message
+          )
+        );
+        console.log('Placeholder message updated with error message.');
+      } else if (chartSpec && description) {
+        const sampledData = sampleData(data);
         chartSpec.data = { values: sampledData };
 
         setConversationHistory((prevHistory) =>
           prevHistory.map((message) =>
-            message.id === placeholderIdRef.current
-              ? { ...message, text: description, chartSpec: chartSpec }
+            message.id === currentPlaceholderId
+              ? {
+                  ...message,
+                  text: description,
+                  chartSpec: chartSpec,
+                  isLoading: false,
+                }
               : message
           )
         );
-      } else if (description) {
-        setConversationHistory((prevHistory) =>
-          prevHistory.map((message) =>
-            message.id === placeholderIdRef.current
-              ? { ...message, text: description }
-              : message
-          )
-        );
+        console.log('Placeholder message updated with chart and description.');
       } else {
         setConversationHistory((prevHistory) =>
           prevHistory.map((message) =>
-            message.id === placeholderIdRef.current
-              ? { ...message, text: 'Received an unexpected response. Please try again.' }
+            message.id === currentPlaceholderId
+              ? {
+                  ...message,
+                  text:
+                    description ||
+                    'Failed to generate a chart. Please try a different query.',
+                  isLoading: false,
+                }
               : message
           )
         );
+        console.log('Placeholder message updated with failure message.');
       }
-      setUserQuery('');
     } catch (error) {
       console.error('Error:', error.response ? error.response.data : error.message);
 
@@ -197,25 +217,29 @@ function Chatbot({ data }) {
         }
       }
 
+      const currentPlaceholderId = placeholderIdRef.current;
+
       setConversationHistory((prevHistory) =>
         prevHistory.map((message) =>
-          message.id === placeholderIdRef.current
-            ? { ...message, text: errorMessage }
+          message.id === currentPlaceholderId
+            ? { ...message, text: errorMessage, isLoading: false }
             : message
         )
       );
+      console.log('Placeholder message updated with error message.');
     } finally {
       console.log('handleSendQuery: Request finished');
       setIsLoading(false);
       placeholderIdRef.current = null;
+      setUserQuery('');
     }
   };
 
   const handleInputKeyDown = (e) => {
     if (e.key === 'Enter') {
       console.log('handleInputKeyDown: Enter key pressed');
-      e.preventDefault(); 
-      handleSendQuery(); 
+      e.preventDefault();
+      handleSendQuery();
     }
   };
 
@@ -227,8 +251,8 @@ function Chatbot({ data }) {
   return (
     <div className="flex flex-col flex-grow">
       <div
-        className="flex-grow overflow-y-auto p-4 rounded-lg bg-[#f0ebe6] max-h-[500px]"
-        ref={conversationContainerRef} 
+        className="h-[500px] overflow-y-auto p-4 rounded-lg bg-[#f0ebe6]"
+        ref={conversationContainerRef}
       >
         {conversationHistory.map((message) => (
           <div
@@ -262,7 +286,14 @@ function Chatbot({ data }) {
                       : 'bg-[#3c2a4d] text-white'
                   }`}
                 >
-                  {message.text}
+                  {message.isLoading ? (
+                    <div className="flex items-center">
+                      <Spinner />
+                      <span className="ml-2">{message.text}</span>
+                    </div>
+                  ) : (
+                    message.text
+                  )}
                 </div>
                 {message.sender === 'assistant' && message.chartSpec && (
                   <ChartRenderer spec={message.chartSpec} />
@@ -271,6 +302,7 @@ function Chatbot({ data }) {
             </div>
           </div>
         ))}
+        <div ref={messagesEndRef} />
       </div>
 
       <div className="flex items-center mt-4">
@@ -349,7 +381,7 @@ function sampleData(data, sampleSize = 1000) {
   if (data.length <= sampleSize) {
     return data;
   }
-  
+
   const step = Math.ceil(data.length / sampleSize);
   return data.filter((_, index) => index % step === 0);
 }

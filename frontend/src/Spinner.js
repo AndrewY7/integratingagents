@@ -2,31 +2,22 @@ import React from 'react';
 
 const Spinner = () => (
   <svg
+    width="80"
+    height="20"
+    viewBox="0 0 80 20"
     xmlns="http://www.w3.org/2000/svg"
-    style={{ margin: 'auto', background: 'none' }}
-    width="24"
-    height="24"
-    viewBox="0 0 100 100"
-    preserveAspectRatio="xMidYMid"
+    fill="#fff"
   >
-    <circle
-      cx="50"
-      cy="50"
-      fill="none"
-      stroke="white"
-      strokeWidth="10"
-      r="35"
-      strokeDasharray="164.93361431346415 56.97787143782138"
-    >
-      <animateTransform
-        attributeName="transform"
-        type="rotate"
-        repeatCount="indefinite"
+    <rect width="80" height="20" fill="none" />
+    <rect x="0" y="0" width="20" height="20">
+      <animate
+        attributeName="x"
+        from="-20"
+        to="80"
         dur="1s"
-        values="0 50 50;360 50 50"
-        keyTimes="0;1"
-      ></animateTransform>
-    </circle>
+        repeatCount="indefinite"
+      />
+    </rect>
   </svg>
 );
 
