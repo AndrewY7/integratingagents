@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ override: true });
 console.log('API Key Loaded:', !!process.env.OPENAI_API_KEY);
 const express = require('express');
 const axios = require('axios');
