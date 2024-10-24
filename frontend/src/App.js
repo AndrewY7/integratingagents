@@ -6,7 +6,6 @@ import userAvatar from './pictures/user.jpg';
 import assistantAvatar from './pictures/aiassistant.jpg';
 import Spinner from './Spinner';
 
-// New function to handle grouped statistics formatting
 function formatStatisticOutput(output) {
   if (typeof output === 'object' && output !== null) {
     return Object.entries(output)
