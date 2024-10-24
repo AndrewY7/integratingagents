@@ -6,12 +6,97 @@ import userAvatar from './pictures/user.jpg';
 import assistantAvatar from './pictures/aiassistant.jpg';
 import Spinner from './Spinner';
 
+// New function to handle grouped statistics formatting
+function formatStatisticOutput(output) {
+  if (typeof output === 'object' && output !== null) {
+    return Object.entries(output)
+      .map(([key, value]) => `${key}: ${value}`)
+      .join('\n');
+  }
+  return output.toString();
+}
+
+const debugDataFlow = {
+  validatePayload: (data, query, datasetInfo) => {
+    const issues = [];
+    
+    if (!data || data.length === 0) {
+      issues.push("Data array is empty or null");
+    } else {
+      console.log("Data sample:", data.slice(0, 2));
+    }
+    
+    if (!datasetInfo) {
+      issues.push("Dataset info is null");
+    } else {
+      if (!datasetInfo.columns || datasetInfo.columns.length === 0) {
+        issues.push("No columns defined in dataset info");
+      }
+      if (!datasetInfo.dataTypes || Object.keys(datasetInfo.dataTypes).length === 0) {
+        issues.push("No data types defined in dataset info");
+      }
+      console.log("Dataset info:", JSON.stringify(datasetInfo, null, 2));
+    }
+    
+    if (!query || query.trim().length === 0) {
+      issues.push("Query is empty");
+    }
+    
+    return {
+      isValid: issues.length === 0,
+      issues,
+      debugInfo: {
+        dataLength: data?.length,
+        columnCount: datasetInfo?.columns?.length,
+        query: query
+      }
+    };
+  },
+
+  validateResponse: (response) => {
+    const issues = [];
+    
+    if (!response) {
+      issues.push("Response is null");
+      return { isValid: false, issues };
+    }
+    
+    if (response.chartSpec) {
+      if (!response.chartSpec.mark) {
+        issues.push("Chart spec missing 'mark' property");
+      }
+      if (!response.chartSpec.encoding) {
+        issues.push("Chart spec missing 'encoding' property");
+      }
+    }
+    
+    if (response.error) {
+      issues.push(`Server error: ${response.error}`);
+    }
+    
+    return {
+      isValid: issues.length === 0,
+      issues,
+      debugInfo: {
+        hasChartSpec: !!response.chartSpec,
+        hasDescription: !!response.description,
+        hasOutput: !!response.output,
+        hasError: !!response.error
+      }
+    };
+  }
+};
+
 function ChartRenderer({ spec }) {
   if (!spec) {
     return null;
   }
 
   try {
+    if (!spec.mark || !spec.encoding) {
+      throw new Error('Invalid chart specification: missing required properties');
+    }
+
     return (
       <div className="mt-4">
         <VegaLite spec={spec} />
@@ -33,7 +118,6 @@ function Chatbot({ data }) {
   const [conversationHistory, setConversationHistory] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  const conversationContainerRef = useRef(null);
   const placeholderIdRef = useRef(null);
   const messagesEndRef = useRef(null);
 
@@ -42,53 +126,26 @@ function Chatbot({ data }) {
   };
 
   useEffect(() => {
-    if (!isLoading) {
-      scrollToBottom();
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [conversationHistory, isLoading]);
-
-  const scrollToBottom = () => {
-    setTimeout(() => {
-      if (messagesEndRef.current) {
-        messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-      }
-    }, 100); // Small delay to ensure content is rendered
-  };
-
-  function constructPrompt(userQuery, datasetInfo) {
-    return `You are an AI assistant that generates Vega-Lite v5 specifications based on user queries and provided dataset information.
-Given the dataset information below, generate a Vega-Lite JSON specification to answer the user's query. If the dataset is too large or granular, perform sensible aggregation (e.g., mean, sum, or count) on relevant fields to provide a more general visualization.
-
-**Dataset Information:**
-${JSON.stringify(datasetInfo, null, 2)}
-
-**User Query:**
-${userQuery}
-
-**Instructions:**
-- Generate a Vega-Lite specification (\`chartSpec\`) that effectively visualizes the data based on the query.
-- If the data contains too many points, use aggregation or sampling where appropriate.
-- Provide a brief description of the chart in plain English (\`description\`).
-- If the query cannot be answered with the dataset, respond with \`{"error": "Please try a different query."}\`.
-
-**Response Format:**
-{
-  "chartSpec": { /* Vega-Lite JSON specification */ },
-  "description": "/* Brief description of the chart in plain English */"
-}
-
-Ensure that:
-- The \`$schema\` in \`chartSpec\` is set to "https://vega.github.io/schema/vega-lite/v5.json".
-- All field names in the specification match exactly those in the dataset.
-- Include the "data" property in the chartSpec with the "values" key set to an empty array. The actual data will be injected later.
-
-Only provide the JSON response without any additional text.`;
-  }
+  }, [conversationHistory]);
 
   function validateDataset(data) {
     if (!data || data.length === 0) {
       return 'The uploaded dataset is empty. Please provide a valid CSV file.';
     }
+    
+    const firstRow = data[0];
+    if (!firstRow || typeof firstRow !== 'object') {
+      return 'Invalid data format. Please ensure your CSV file has headers.';
+    }
+    
+    const emptyColumns = Object.keys(firstRow).filter(key => key.trim() === '');
+    if (emptyColumns.length > 0) {
+      return 'Dataset contains empty column headers. Please fix your CSV file.';
+    }
+    
     return null;
   }
 
@@ -98,7 +155,7 @@ Only provide the JSON response without any additional text.`;
       return;
     }
 
-    console.log('handleSendQuery: Sending request');
+    console.log('handleSendQuery: Starting request processing');
     setIsLoading(true);
 
     const userMessageId = generateMessageId();
@@ -117,11 +174,7 @@ Only provide the JSON response without any additional text.`;
       setUserQuery('');
       return;
     }
-
-    const datasetInfo = getDatasetInfo(data);
-    const prompt = constructPrompt(userQuery, datasetInfo);
-    const expectedFields = datasetInfo.columns;
-
+    
     const validationError = validateDataset(data);
     if (validationError) {
       const assistantMessageId = generateMessageId();
@@ -129,6 +182,24 @@ Only provide the JSON response without any additional text.`;
         id: assistantMessageId,
         sender: 'assistant',
         text: validationError,
+      };
+      setConversationHistory((prevHistory) => [...prevHistory, assistantMessage]);
+      setIsLoading(false);
+      setUserQuery('');
+      return;
+    }
+    
+    const datasetInfo = getDatasetInfo(data);
+    console.log('Dataset Info:', JSON.stringify(datasetInfo, null, 2));
+
+    const validationResult = debugDataFlow.validatePayload(data, userQuery, datasetInfo);
+    if (!validationResult.isValid) {
+      console.error("Payload validation failed:", validationResult.issues);
+      const assistantMessageId = generateMessageId();
+      const assistantMessage = {
+        id: assistantMessageId,
+        sender: 'assistant',
+        text: `Error: ${validationResult.issues.join(', ')}`,
       };
       setConversationHistory((prevHistory) => [...prevHistory, assistantMessage]);
       setIsLoading(false);
@@ -147,19 +218,26 @@ Only provide the JSON response without any additional text.`;
     placeholderIdRef.current = placeholderMessageId;
 
     try {
-      console.log('Sending request to server with prompt:', prompt);
-      console.log('Expected fields:', expectedFields);
+      console.log('Sending request to server with validated payload');
 
       const response = await axios.post(
-        `${process.env.REACT_APP_API_URL}/api/generate-chart`,
+        `${process.env.REACT_APP_API_URL}/api/generate-response`,
         {
-          prompt: prompt,
-          expectedFields: expectedFields,
+          userQuery: userQuery,
+          datasetInfo: datasetInfo,
+          data: data,
         }
       );
 
-      const { chartSpec, description, error } = response.data;
+      console.log('Received response from server:', response);
 
+      const responseValidation = debugDataFlow.validateResponse(response.data);
+      if (!responseValidation.isValid) {
+        console.error("Response validation failed:", responseValidation.issues);
+        throw new Error(responseValidation.issues.join(', '));
+      }
+
+      const { chartSpec, description, output, error } = response.data;
       const currentPlaceholderId = placeholderIdRef.current;
 
       if (error) {
@@ -170,8 +248,12 @@ Only provide the JSON response without any additional text.`;
               : message
           )
         );
-        console.log('Placeholder message updated with error message.');
+        console.log('Updated with error message');
       } else if (chartSpec && description) {
+        if (!chartSpec.mark || !chartSpec.encoding) {
+          throw new Error('Invalid chart specification received from server');
+        }
+        
         const sampledData = sampleData(data);
         chartSpec.data = { values: sampledData };
 
@@ -187,38 +269,36 @@ Only provide the JSON response without any additional text.`;
               : message
           )
         );
-        console.log('Placeholder message updated with chart and description.');
-      } else {
+        console.log('Updated with chart and description');
+      } else if (output !== undefined) {
+        // Updated output handling using formatStatisticOutput
+        const formattedOutput = formatStatisticOutput(output);
         setConversationHistory((prevHistory) =>
           prevHistory.map((message) =>
             message.id === currentPlaceholderId
-              ? {
-                  ...message,
-                  text:
-                    description ||
-                    'Failed to generate a chart. Please try a different query.',
-                  isLoading: false,
-                }
+              ? { ...message, text: formattedOutput, isLoading: false }
               : message
           )
         );
-        console.log('Placeholder message updated with failure message.');
+        console.log('Updated with formatted output:', formattedOutput);
+      } else {
+        throw new Error('Invalid response format from server');
       }
     } catch (error) {
       console.error('Error:', error.response ? error.response.data : error.message);
 
-      let errorMessage = 'An error occurred while generating the chart.';
-
+      let errorMessage = 'An error occurred while processing your request. ';
       if (error.response) {
         if (error.response.status === 429) {
           errorMessage = 'Rate limit exceeded. Please wait a moment and try again.';
         } else {
-          errorMessage = error.response.data.error || errorMessage;
+          errorMessage += error.response.data.error || error.message;
         }
+      } else {
+        errorMessage += error.message;
       }
 
       const currentPlaceholderId = placeholderIdRef.current;
-
       setConversationHistory((prevHistory) =>
         prevHistory.map((message) =>
           message.id === currentPlaceholderId
@@ -226,7 +306,6 @@ Only provide the JSON response without any additional text.`;
             : message
         )
       );
-      console.log('Placeholder message updated with error message.');
     } finally {
       console.log('handleSendQuery: Request finished');
       setIsLoading(false);
@@ -250,10 +329,7 @@ Only provide the JSON response without any additional text.`;
 
   return (
     <div className="flex flex-col flex-grow">
-      <div
-        className="h-[500px] overflow-y-auto p-4 rounded-lg bg-[#f0ebe6]"
-        ref={conversationContainerRef}
-      >
+      <div className="h-[500px] overflow-y-auto p-4 rounded-lg bg-[#f0ebe6]">
         {conversationHistory.map((message) => (
           <div
             key={message.id}
@@ -280,7 +356,7 @@ Only provide the JSON response without any additional text.`;
                   {message.sender === 'user' ? 'You' : 'Assistant'}
                 </div>
                 <div
-                  className={`inline-block px-4 py-2 rounded-lg ${
+                  className={`inline-block px-4 py-2 rounded-lg whitespace-pre-wrap ${
                     message.sender === 'user'
                       ? 'bg-[#4b284e] text-white'
                       : 'bg-[#3c2a4d] text-white'
@@ -338,6 +414,11 @@ Only provide the JSON response without any additional text.`;
 }
 
 function getDatasetInfo(data) {
+  if (!data || data.length === 0) {
+    console.error('getDatasetInfo: Data is empty or undefined');
+    return null;
+  }
+
   const columns = Object.keys(data[0]);
   const dataTypes = {};
   const sampleValues = {};
@@ -352,25 +433,34 @@ function getDatasetInfo(data) {
 }
 
 function inferVegaLiteType(values) {
-  const sampleValues = values.slice(0, 10);
+  const sampleSize = 30;
+  const spread = Math.floor(values.length / 3);
+  const sampleValues = [
+    ...values.slice(0, sampleSize),
+    ...values.slice(spread, spread + sampleSize),
+    ...values.slice(-sampleSize)
+  ].filter(v => v !== null && v !== undefined);
+
+  if (sampleValues.length === 0) return 'nominal';
+
   const allNumbers = sampleValues.every(
-    (v) => typeof v === 'number' && !isNaN(v)
+    (v) => !isNaN(Number(v)) && v !== ''
   );
   if (allNumbers) {
     return 'quantitative';
   }
 
   const allDates = sampleValues.every(
-    (v) => v instanceof Date || !isNaN(Date.parse(v))
+    (v) => !isNaN(Date.parse(String(v)))
   );
   if (allDates) {
     return 'temporal';
   }
 
-  const allOrdinals = sampleValues.every(
-    (v) => typeof v === 'string' || typeof v === 'number'
-  );
-  if (allOrdinals) {
+  const uniqueValues = new Set(sampleValues);
+  const uniqueRatio = uniqueValues.size / sampleValues.length;
+  
+  if (uniqueRatio < 0.3) {
     return 'ordinal';
   }
 
@@ -378,20 +468,39 @@ function inferVegaLiteType(values) {
 }
 
 function sampleData(data, sampleSize = 1000) {
+  if (!data || data.length === 0) {
+    console.error('sampleData: Empty or null data provided');
+    return [];
+  }
+
   if (data.length <= sampleSize) {
     return data;
   }
 
-  const step = Math.ceil(data.length / sampleSize);
-  return data.filter((_, index) => index % step === 0);
+  const result = [];
+  const step = data.length / sampleSize;
+  
+  for (let i = 0; i < sampleSize; i++) {
+    const index = Math.floor(i * step);
+    if (index < data.length) {
+      result.push(data[index]);
+    }
+  }
+
+  return result;
 }
 
 function App() {
   const [data, setData] = useState(null);
 
   const handleFileUploaded = (parsedData) => {
+    if (!parsedData || parsedData.length === 0) {
+      console.error('Empty or invalid data received from file upload');
+      return;
+    }
+    
     setData(parsedData);
-    console.log('Parsed Data:', parsedData);
+    console.log('Parsed Data Sample:', parsedData.slice(0, 2));
   };
 
   return (
