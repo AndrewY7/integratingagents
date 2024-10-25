@@ -12,7 +12,7 @@ app.use(express.json({ limit: '50mb' }));
 const allowedOrigins = [
   'http://localhost:3000',
   'https://andrewy7.github.io',
-  'https://andrewy7.github.io/bchai/',
+  'https://andrewy7.github.io/integratingagents/',
 ];
 
 const corsOptions = {
