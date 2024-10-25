@@ -245,13 +245,14 @@ function validateAndFormatResponse(message) {
   }
 }
 
+// OpenAI Communication Functions
 async function callOpenAIWithRetry(messages, functions, retries = 3) {
   try {
     console.log(`callOpenAIWithRetry: Attempting OpenAI API call. Retries left: ${retries}`);
     const response = await axios.post(
       'https://api.openai.com/v1/chat/completions',
       {
-        model: 'gpt-4o-mini', 
+        model: 'gpt-4',  // Changed from 'gpt-4o-mini' to 'gpt-4'
         messages: messages,
         functions: functions,
         function_call: 'auto',
@@ -556,6 +557,7 @@ function computeStatistic({ operation, field, field2, groupBy, filters }) {
   };
 }
 
+// Function Definitions for OpenAI
 const functions = [
   {
     name: 'generate_vega_spec',
